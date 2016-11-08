@@ -2,36 +2,28 @@
 #include "config.h"
 #endif
 
-#ifndef HAVE_LIBCHECK
-#   include <assert.h>
+#include "helpers.h"
 
-#   define ck_assert(X) assert(X);
-#   define START_TEST(NAME) void NAME ()
-#   define END_TEST
-#else
-#   include "helpers.h"
-#endif
-
-#include <sys/types.h>
 #include <stdint.h>
-#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
 #include <time.h>
 
 #include <vpx/vpx_image.h>
 
+#include "../toxav/toxav.h"
+#include "../toxcore/crypto_core.h"
+#include "../toxcore/logger.h"
 #include "../toxcore/tox.h"
 #include "../toxcore/util.h"
-#include "../toxcore/logger.h"
-#include "../toxcore/crypto_core.h"
-#include "../toxav/toxav.h"
 
 #if defined(_WIN32) || defined(__WIN32__) || defined (WIN32)
 #define c_sleep(x) Sleep(1*x)
 #else
-#include <unistd.h>
 #include <pthread.h>
+#include <unistd.h>
 #define c_sleep(x) usleep(1000*x)
 #endif
 
@@ -52,7 +44,7 @@ typedef struct {
 /**
  * Callbacks
  */
-void t_toxav_call_cb(ToxAV *av, uint32_t friend_number, bool audio_enabled, bool video_enabled, void *user_data)
+static void t_toxav_call_cb(ToxAV *av, uint32_t friend_number, bool audio_enabled, bool video_enabled, void *user_data)
 {
     (void) av;
     (void) audio_enabled;
@@ -61,16 +53,16 @@ void t_toxav_call_cb(ToxAV *av, uint32_t friend_number, bool audio_enabled, bool
     printf("Handling CALL callback\n");
     ((CallControl *)user_data)[friend_number].incoming = true;
 }
-void t_toxav_call_state_cb(ToxAV *av, uint32_t friend_number, uint32_t state, void *user_data)
+static void t_toxav_call_state_cb(ToxAV *av, uint32_t friend_number, uint32_t state, void *user_data)
 {
-    printf("Handling CALL STATE callback: %d %p\n", state, av);
+    printf("Handling CALL STATE callback: %d %p\n", state, (void *)av);
     ((CallControl *)user_data)[friend_number].state = state;
 }
-void t_toxav_receive_video_frame_cb(ToxAV *av, uint32_t friend_number,
-                                    uint16_t width, uint16_t height,
-                                    uint8_t const *y, uint8_t const *u, uint8_t const *v,
-                                    int32_t ystride, int32_t ustride, int32_t vstride,
-                                    void *user_data)
+static void t_toxav_receive_video_frame_cb(ToxAV *av, uint32_t friend_number,
+        uint16_t width, uint16_t height,
+        uint8_t const *y, uint8_t const *u, uint8_t const *v,
+        int32_t ystride, int32_t ustride, int32_t vstride,
+        void *user_data)
 {
     (void) av;
     (void) friend_number;
@@ -84,12 +76,12 @@ void t_toxav_receive_video_frame_cb(ToxAV *av, uint32_t friend_number,
     (void) vstride;
     (void) user_data;
 }
-void t_toxav_receive_audio_frame_cb(ToxAV *av, uint32_t friend_number,
-                                    int16_t const *pcm,
-                                    size_t sample_count,
-                                    uint8_t channels,
-                                    uint32_t sampling_rate,
-                                    void *user_data)
+static void t_toxav_receive_audio_frame_cb(ToxAV *av, uint32_t friend_number,
+        int16_t const *pcm,
+        size_t sample_count,
+        uint8_t channels,
+        uint32_t sampling_rate,
+        void *user_data)
 {
     (void) av;
     (void) friend_number;
@@ -99,7 +91,8 @@ void t_toxav_receive_audio_frame_cb(ToxAV *av, uint32_t friend_number,
     (void) sampling_rate;
     (void) user_data;
 }
-void t_accept_friend_request_cb(Tox *m, const uint8_t *public_key, const uint8_t *data, size_t length, void *userdata)
+static void t_accept_friend_request_cb(Tox *m, const uint8_t *public_key, const uint8_t *data, size_t length,
+                                       void *userdata)
 {
     (void) userdata;
 
@@ -112,7 +105,7 @@ void t_accept_friend_request_cb(Tox *m, const uint8_t *public_key, const uint8_t
 /**
  * Iterate helper
  */
-ToxAV *setup_av_instance(Tox *tox, CallControl *CC)
+static ToxAV *setup_av_instance(Tox *tox, CallControl *CC)
 {
     TOXAV_ERR_NEW error;
 
@@ -126,14 +119,13 @@ ToxAV *setup_av_instance(Tox *tox, CallControl *CC)
 
     return av;
 }
-void *call_thread(void *pd)
+static void *call_thread(void *pd)
 {
     ToxAV *AliceAV = ((thread_data *) pd)->AliceAV;
     ToxAV *BobAV = ((thread_data *) pd)->BobAV;
     CallControl *AliceCC = ((thread_data *) pd)->AliceCC;
     CallControl *BobCC = ((thread_data *) pd)->BobCC;
     uint32_t friend_number = ((thread_data *) pd)->friend_number;
-
 
     memset(AliceCC, 0, sizeof(CallControl));
     memset(BobCC, 0, sizeof(CallControl));
@@ -148,8 +140,9 @@ void *call_thread(void *pd)
         }
     }
 
-    while (!BobCC->incoming)
+    while (!BobCC->incoming) {
         c_sleep(10);
+    }
 
     { /* Answer */
         TOXAV_ERR_ANSWER rc;
@@ -163,15 +156,10 @@ void *call_thread(void *pd)
 
     c_sleep(30);
 
-    int16_t PCM[960];
-    uint8_t video_y[800 * 600];
-    uint8_t video_u[800 * 600 / 2];
-    uint8_t video_v[800 * 600 / 2];
-
-    memset(PCM, 0, sizeof(PCM));
-    memset(video_y, 0, sizeof(video_y));
-    memset(video_u, 0, sizeof(video_u));
-    memset(video_v, 0, sizeof(video_v));
+    int16_t *PCM = (int16_t *)calloc(960, sizeof(int16_t));
+    uint8_t *video_y = (uint8_t *)calloc(800 * 600, sizeof(uint8_t));
+    uint8_t *video_u = (uint8_t *)calloc(800 * 600 / 4, sizeof(uint8_t));
+    uint8_t *video_v = (uint8_t *)calloc(800 * 600 / 4, sizeof(uint8_t));
 
     time_t start_time = time(NULL);
 
@@ -193,19 +181,25 @@ void *call_thread(void *pd)
         toxav_call_control(AliceAV, friend_number, TOXAV_CALL_CONTROL_CANCEL, &rc);
 
         if (rc != TOXAV_ERR_CALL_CONTROL_OK) {
-            printf("toxav_call_control failed: %d %p %p\n", rc, AliceAV, BobAV);
+            printf("toxav_call_control failed: %d %p %p\n", rc, (void *)AliceAV, (void *)BobAV);
         }
     }
 
     c_sleep(30);
 
-    printf ("Closing thread\n");
+    free(PCM);
+    free(video_y);
+    free(video_u);
+    free(video_v);
+
+    printf("Closing thread\n");
     pthread_exit(NULL);
 }
 
 
 START_TEST(test_AV_three_calls)
 {
+    uint32_t index[] = { 1, 2, 3, 4, 5 };
     Tox *Alice, *bootstrap, *Bobs[3];
     ToxAV *AliceAV, *BobsAV[3];
 
@@ -214,19 +208,19 @@ START_TEST(test_AV_three_calls)
     {
         TOX_ERR_NEW error;
 
-        bootstrap = tox_new(NULL, &error);
+        bootstrap = tox_new_log(NULL, &error, &index[0]);
         ck_assert(error == TOX_ERR_NEW_OK);
 
-        Alice = tox_new(NULL, &error);
+        Alice = tox_new_log(NULL, &error, &index[1]);
         ck_assert(error == TOX_ERR_NEW_OK);
 
-        Bobs[0] = tox_new(NULL, &error);
+        Bobs[0] = tox_new_log(NULL, &error, &index[2]);
         ck_assert(error == TOX_ERR_NEW_OK);
 
-        Bobs[1] = tox_new(NULL, &error);
+        Bobs[1] = tox_new_log(NULL, &error, &index[3]);
         ck_assert(error == TOX_ERR_NEW_OK);
 
-        Bobs[2] = tox_new(NULL, &error);
+        Bobs[2] = tox_new_log(NULL, &error, &index[4]);
         ck_assert(error == TOX_ERR_NEW_OK);
     }
 
@@ -234,25 +228,24 @@ START_TEST(test_AV_three_calls)
     printf("Preparing network...\n");
     long long unsigned int cur_time = time(NULL);
 
-    uint32_t to_compare = 974536;
     uint8_t address[TOX_ADDRESS_SIZE];
 
-    tox_callback_friend_request(Alice, t_accept_friend_request_cb, &to_compare);
+    tox_callback_friend_request(Alice, t_accept_friend_request_cb);
     tox_self_get_address(Alice, address);
 
 
-    ck_assert(tox_friend_add(Bobs[0], address, (uint8_t *)"gentoo", 7, NULL) != (uint32_t) ~0);
-    ck_assert(tox_friend_add(Bobs[1], address, (uint8_t *)"gentoo", 7, NULL) != (uint32_t) ~0);
-    ck_assert(tox_friend_add(Bobs[2], address, (uint8_t *)"gentoo", 7, NULL) != (uint32_t) ~0);
+    ck_assert(tox_friend_add(Bobs[0], address, (const uint8_t *)"gentoo", 7, NULL) != (uint32_t) ~0);
+    ck_assert(tox_friend_add(Bobs[1], address, (const uint8_t *)"gentoo", 7, NULL) != (uint32_t) ~0);
+    ck_assert(tox_friend_add(Bobs[2], address, (const uint8_t *)"gentoo", 7, NULL) != (uint32_t) ~0);
 
     uint8_t off = 1;
 
     while (1) {
-        tox_iterate(bootstrap);
-        tox_iterate(Alice);
-        tox_iterate(Bobs[0]);
-        tox_iterate(Bobs[1]);
-        tox_iterate(Bobs[2]);
+        tox_iterate(bootstrap, NULL);
+        tox_iterate(Alice, NULL);
+        tox_iterate(Bobs[0], NULL);
+        tox_iterate(Bobs[1], NULL);
+        tox_iterate(Bobs[2], NULL);
 
         if (tox_self_get_connection_status(bootstrap) &&
                 tox_self_get_connection_status(Alice) &&
@@ -268,8 +261,9 @@ START_TEST(test_AV_three_calls)
                 tox_friend_get_connection_status(Alice, 2, NULL) == TOX_CONNECTION_UDP &&
                 tox_friend_get_connection_status(Bobs[0], 0, NULL) == TOX_CONNECTION_UDP &&
                 tox_friend_get_connection_status(Bobs[1], 0, NULL) == TOX_CONNECTION_UDP &&
-                tox_friend_get_connection_status(Bobs[2], 0, NULL) == TOX_CONNECTION_UDP)
+                tox_friend_get_connection_status(Bobs[2], 0, NULL) == TOX_CONNECTION_UDP) {
             break;
+        }
 
         c_sleep(20);
     }
@@ -313,10 +307,10 @@ START_TEST(test_AV_three_calls)
     time_t start_time = time(NULL);
 
     while (time(NULL) - start_time < 5) {
-        tox_iterate(Alice);
-        tox_iterate(Bobs[0]);
-        tox_iterate(Bobs[1]);
-        tox_iterate(Bobs[2]);
+        tox_iterate(Alice, NULL);
+        tox_iterate(Bobs[0], NULL);
+        tox_iterate(Bobs[1], NULL);
+        tox_iterate(Bobs[2], NULL);
         c_sleep(20);
     }
 
@@ -324,7 +318,7 @@ START_TEST(test_AV_three_calls)
     (void) pthread_join(tids[1], NULL);
     (void) pthread_join(tids[2], NULL);
 
-    printf ("Killing all instances\n");
+    printf("Killing all instances\n");
     toxav_kill(BobsAV[0]);
     toxav_kill(BobsAV[1]);
     toxav_kill(BobsAV[2]);
@@ -340,17 +334,7 @@ START_TEST(test_AV_three_calls)
 END_TEST
 
 
-#ifndef HAVE_LIBCHECK
-int main(int argc, char *argv[])
-{
-    (void) argc;
-    (void) argv;
-
-    test_AV_three_calls();
-    return 0;
-}
-#else
-Suite *tox_suite(void)
+static Suite *tox_suite(void)
 {
     Suite *s = suite_create("ToxAV");
 
@@ -379,4 +363,3 @@ int main(int argc, char *argv[])
 
     return number_failed;
 }
-#endif

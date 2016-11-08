@@ -25,13 +25,16 @@
 #define NETWORK_H
 
 #ifdef PLAN9
-#include <u.h> //Plan 9 requires this is imported first
+#include <u.h> // Plan 9 requires this is imported first
+// Comment line here to avoid reordering by source code formatters.
 #include <libc.h>
 #endif
 
-#include <stdlib.h>
-#include <stdio.h>
+#include "logger.h"
+
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -40,7 +43,12 @@
 //Windows XP
 #define WINVER 0x0501
 #endif
+
+// The mingw32/64 Windows library warns about including winsock2.h after
+// windows.h even though with the above it's a valid thing to do. So, to make
+// mingw32 headers happy, we include winsock2.h first.
 #include <winsock2.h>
+
 #include <windows.h>
 #include <ws2tcpip.h>
 
@@ -58,14 +66,14 @@ typedef short sa_family_t;
 
 #else // Linux includes
 
-#include <fcntl.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <netdb.h>
 #include <unistd.h>
 
 typedef int sock_t;
@@ -94,33 +102,36 @@ typedef int sock_t;
 
 #define MAX_UDP_PACKET_SIZE 2048
 
-#define NET_PACKET_PING_REQUEST    0   /* Ping request packet ID. */
-#define NET_PACKET_PING_RESPONSE   1   /* Ping response packet ID. */
-#define NET_PACKET_GET_NODES       2   /* Get nodes request packet ID. */
-#define NET_PACKET_SEND_NODES_IPV6 4   /* Send nodes response packet ID for other addresses. */
-#define NET_PACKET_COOKIE_REQUEST  24  /* Cookie request packet */
-#define NET_PACKET_COOKIE_RESPONSE 25  /* Cookie response packet */
-#define NET_PACKET_CRYPTO_HS       26  /* Crypto handshake packet */
-#define NET_PACKET_CRYPTO_DATA     27  /* Crypto data packet */
-#define NET_PACKET_CRYPTO          32  /* Encrypted data packet ID. */
-#define NET_PACKET_LAN_DISCOVERY   33  /* LAN discovery packet ID. */
+typedef enum NET_PACKET_TYPE {
+    NET_PACKET_PING_REQUEST         = 0x00, /* Ping request packet ID. */
+    NET_PACKET_PING_RESPONSE        = 0x01, /* Ping response packet ID. */
+    NET_PACKET_GET_NODES            = 0x02, /* Get nodes request packet ID. */
+    NET_PACKET_SEND_NODES_IPV6      = 0x04, /* Send nodes response packet ID for other addresses. */
+    NET_PACKET_COOKIE_REQUEST       = 0x18, /* Cookie request packet */
+    NET_PACKET_COOKIE_RESPONSE      = 0x19, /* Cookie response packet */
+    NET_PACKET_CRYPTO_HS            = 0x1a, /* Crypto handshake packet */
+    NET_PACKET_CRYPTO_DATA          = 0x1b, /* Crypto data packet */
+    NET_PACKET_CRYPTO               = 0x20, /* Encrypted data packet ID. */
+    NET_PACKET_LAN_DISCOVERY        = 0x21, /* LAN discovery packet ID. */
 
-/* See:  docs/Prevent_Tracking.txt and onion.{c, h} */
-#define NET_PACKET_ONION_SEND_INITIAL 128
-#define NET_PACKET_ONION_SEND_1 129
-#define NET_PACKET_ONION_SEND_2 130
+    /* See: docs/Prevent_Tracking.txt and onion.{c,h} */
+    NET_PACKET_ONION_SEND_INITIAL   = 0x80,
+    NET_PACKET_ONION_SEND_1         = 0x81,
+    NET_PACKET_ONION_SEND_2         = 0x82,
 
-#define NET_PACKET_ANNOUNCE_REQUEST 131
-#define NET_PACKET_ANNOUNCE_RESPONSE 132
-#define NET_PACKET_ONION_DATA_REQUEST 133
-#define NET_PACKET_ONION_DATA_RESPONSE 134
+    NET_PACKET_ANNOUNCE_REQUEST     = 0x83,
+    NET_PACKET_ANNOUNCE_RESPONSE    = 0x84,
+    NET_PACKET_ONION_DATA_REQUEST   = 0x85,
+    NET_PACKET_ONION_DATA_RESPONSE  = 0x86,
 
-#define NET_PACKET_ONION_RECV_3 140
-#define NET_PACKET_ONION_RECV_2 141
-#define NET_PACKET_ONION_RECV_1 142
+    NET_PACKET_ONION_RECV_3         = 0x8c,
+    NET_PACKET_ONION_RECV_2         = 0x8d,
+    NET_PACKET_ONION_RECV_1         = 0x8e,
 
-/* Only used for bootstrap nodes */
-#define BOOTSTRAP_INFO_PACKET_ID 240
+    BOOTSTRAP_INFO_PACKET_ID        = 0xf0, /* Only used for bootstrap nodes */
+
+    NET_PACKET_MAX                  = 0xff, /* This type must remain within a single uint8. */
+} NET_PACKET_TYPE;
 
 
 #define TOX_PORTRANGE_FROM 33445
@@ -152,7 +163,7 @@ IP6;
 
 typedef struct {
     uint8_t family;
-    union {
+    __extension__ union {
         IP4 ip4;
         IP6 ip6;
     };
@@ -290,7 +301,8 @@ int addr_resolve_or_parse_ip(const char *address, IP *to, IP *extra);
  * Packet data is put into data.
  * Packet length is put into length.
  */
-typedef int (*packet_handler_callback)(void *object, IP_Port ip_port, const uint8_t *data, uint16_t len);
+typedef int (*packet_handler_callback)(void *object, IP_Port ip_port, const uint8_t *data, uint16_t len,
+                                       void *userdata);
 
 typedef struct {
     packet_handler_callback function;
@@ -298,6 +310,7 @@ typedef struct {
 } Packet_Handles;
 
 typedef struct {
+    Logger *log;
     Packet_Handles packethandlers[256];
 
     sa_family_t family;
@@ -364,7 +377,7 @@ int sendpacket(Networking_Core *net, IP_Port ip_port, const uint8_t *data, uint1
 void networking_registerhandler(Networking_Core *net, uint8_t byte, packet_handler_callback cb, void *object);
 
 /* Call this several times a second. */
-void networking_poll(Networking_Core *net);
+void networking_poll(Networking_Core *net, void *userdata);
 
 /* Initialize networking.
  * bind to ip and port.
@@ -376,8 +389,8 @@ void networking_poll(Networking_Core *net);
  *
  * If error is non NULL it is set to 0 if no issues, 1 if socket related error, 2 if other.
  */
-Networking_Core *new_networking(IP ip, uint16_t port);
-Networking_Core *new_networking_ex(IP ip, uint16_t port_from, uint16_t port_to, unsigned int *error);
+Networking_Core *new_networking(Logger *log, IP ip, uint16_t port);
+Networking_Core *new_networking_ex(Logger *log, IP ip, uint16_t port_from, uint16_t port_to, unsigned int *error);
 
 /* Function to cleanup networking stuff (doesn't do much right now). */
 void kill_networking(Networking_Core *net);

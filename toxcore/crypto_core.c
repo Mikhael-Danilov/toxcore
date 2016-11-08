@@ -65,8 +65,9 @@ uint64_t random_64b(void)
  */
 int public_key_valid(const uint8_t *public_key)
 {
-    if (public_key[31] >= 128) /* Last bit of key is always zero. */
+    if (public_key[31] >= 128) { /* Last bit of key is always zero. */
         return 0;
+    }
 
     return 1;
 }
@@ -76,16 +77,17 @@ int public_key_valid(const uint8_t *public_key)
  * encrypt/decrypt operation.
  * enc_key has to be crypto_box_BEFORENMBYTES bytes long.
  */
-void encrypt_precompute(const uint8_t *public_key, const uint8_t *secret_key, uint8_t *enc_key)
+int encrypt_precompute(const uint8_t *public_key, const uint8_t *secret_key, uint8_t *enc_key)
 {
-    crypto_box_beforenm(enc_key, public_key, secret_key);
+    return crypto_box_beforenm(enc_key, public_key, secret_key);
 }
 
 int encrypt_data_symmetric(const uint8_t *secret_key, const uint8_t *nonce, const uint8_t *plain, uint32_t length,
                            uint8_t *encrypted)
 {
-    if (length == 0 || !secret_key || !nonce || !plain || !encrypted)
+    if (length == 0 || !secret_key || !nonce || !plain || !encrypted) {
         return -1;
+    }
 
     uint8_t temp_plain[length + crypto_box_ZEROBYTES];
     uint8_t temp_encrypted[length + crypto_box_MACBYTES + crypto_box_BOXZEROBYTES];
@@ -93,8 +95,9 @@ int encrypt_data_symmetric(const uint8_t *secret_key, const uint8_t *nonce, cons
     memset(temp_plain, 0, crypto_box_ZEROBYTES);
     memcpy(temp_plain + crypto_box_ZEROBYTES, plain, length); // Pad the message with 32 0 bytes.
 
-    if (crypto_box_afternm(temp_encrypted, temp_plain, length + crypto_box_ZEROBYTES, nonce, secret_key) != 0)
+    if (crypto_box_afternm(temp_encrypted, temp_plain, length + crypto_box_ZEROBYTES, nonce, secret_key) != 0) {
         return -1;
+    }
 
     /* Unpad the encrypted message. */
     memcpy(encrypted, temp_encrypted + crypto_box_BOXZEROBYTES, length + crypto_box_MACBYTES);
@@ -104,8 +107,9 @@ int encrypt_data_symmetric(const uint8_t *secret_key, const uint8_t *nonce, cons
 int decrypt_data_symmetric(const uint8_t *secret_key, const uint8_t *nonce, const uint8_t *encrypted, uint32_t length,
                            uint8_t *plain)
 {
-    if (length <= crypto_box_BOXZEROBYTES || !secret_key || !nonce || !encrypted || !plain)
+    if (length <= crypto_box_BOXZEROBYTES || !secret_key || !nonce || !encrypted || !plain) {
         return -1;
+    }
 
     uint8_t temp_plain[length + crypto_box_ZEROBYTES];
     uint8_t temp_encrypted[length + crypto_box_BOXZEROBYTES];
@@ -113,8 +117,9 @@ int decrypt_data_symmetric(const uint8_t *secret_key, const uint8_t *nonce, cons
     memset(temp_encrypted, 0, crypto_box_BOXZEROBYTES);
     memcpy(temp_encrypted + crypto_box_BOXZEROBYTES, encrypted, length); // Pad the message with 16 0 bytes.
 
-    if (crypto_box_open_afternm(temp_plain, temp_encrypted, length + crypto_box_BOXZEROBYTES, nonce, secret_key) != 0)
+    if (crypto_box_open_afternm(temp_plain, temp_encrypted, length + crypto_box_BOXZEROBYTES, nonce, secret_key) != 0) {
         return -1;
+    }
 
     memcpy(plain, temp_plain + crypto_box_ZEROBYTES, length - crypto_box_MACBYTES);
     return length - crypto_box_MACBYTES;
@@ -123,8 +128,9 @@ int decrypt_data_symmetric(const uint8_t *secret_key, const uint8_t *nonce, cons
 int encrypt_data(const uint8_t *public_key, const uint8_t *secret_key, const uint8_t *nonce,
                  const uint8_t *plain, uint32_t length, uint8_t *encrypted)
 {
-    if (!public_key || !secret_key)
+    if (!public_key || !secret_key) {
         return -1;
+    }
 
     uint8_t k[crypto_box_BEFORENMBYTES];
     encrypt_precompute(public_key, secret_key, k);
@@ -136,8 +142,9 @@ int encrypt_data(const uint8_t *public_key, const uint8_t *secret_key, const uin
 int decrypt_data(const uint8_t *public_key, const uint8_t *secret_key, const uint8_t *nonce,
                  const uint8_t *encrypted, uint32_t length, uint8_t *plain)
 {
-    if (!public_key || !secret_key)
+    if (!public_key || !secret_key) {
         return -1;
+    }
 
     uint8_t k[crypto_box_BEFORENMBYTES];
     encrypt_precompute(public_key, secret_key, k);
@@ -150,7 +157,7 @@ int decrypt_data(const uint8_t *public_key, const uint8_t *secret_key, const uin
 /* Increment the given nonce by 1. */
 void increment_nonce(uint8_t *nonce)
 {
-    /* FIXME use increment_nonce_number(nonce, 1) or sodium_increment (change to little endian)
+    /* TODO(irungentoo): use increment_nonce_number(nonce, 1) or sodium_increment (change to little endian)
      * NOTE don't use breaks inside this loop
      * In particular, make sure, as far as possible,
      * that loop bounds and their potential underflow or overflow
@@ -207,77 +214,4 @@ void new_symmetric_key(uint8_t *key)
 void new_nonce(uint8_t *nonce)
 {
     random_nonce(nonce);
-}
-
-/* Create a request to peer.
- * send_public_key and send_secret_key are the pub/secret keys of the sender.
- * recv_public_key is public key of receiver.
- * packet must be an array of MAX_CRYPTO_REQUEST_SIZE big.
- * Data represents the data we send with the request with length being the length of the data.
- * request_id is the id of the request (32 = friend request, 254 = ping request).
- *
- *  return -1 on failure.
- *  return the length of the created packet on success.
- */
-int create_request(const uint8_t *send_public_key, const uint8_t *send_secret_key, uint8_t *packet,
-                   const uint8_t *recv_public_key, const uint8_t *data, uint32_t length, uint8_t request_id)
-{
-    if (!send_public_key || !packet || !recv_public_key || !data)
-        return -1;
-
-    if (MAX_CRYPTO_REQUEST_SIZE < length + 1 + crypto_box_PUBLICKEYBYTES * 2 + crypto_box_NONCEBYTES + 1 +
-            crypto_box_MACBYTES)
-        return -1;
-
-    uint8_t *nonce = packet + 1 + crypto_box_PUBLICKEYBYTES * 2;
-    new_nonce(nonce);
-    uint8_t temp[MAX_CRYPTO_REQUEST_SIZE]; // FIXME sodium_memzero before exit function
-    memcpy(temp + 1, data, length);
-    temp[0] = request_id;
-    int len = encrypt_data(recv_public_key, send_secret_key, nonce, temp, length + 1,
-                           1 + crypto_box_PUBLICKEYBYTES * 2 + crypto_box_NONCEBYTES + packet);
-
-    if (len == -1)
-        return -1;
-
-    packet[0] = NET_PACKET_CRYPTO;
-    memcpy(packet + 1, recv_public_key, crypto_box_PUBLICKEYBYTES);
-    memcpy(packet + 1 + crypto_box_PUBLICKEYBYTES, send_public_key, crypto_box_PUBLICKEYBYTES);
-
-    return len + 1 + crypto_box_PUBLICKEYBYTES * 2 + crypto_box_NONCEBYTES;
-}
-
-/* Puts the senders public key in the request in public_key, the data from the request
- * in data if a friend or ping request was sent to us and returns the length of the data.
- * packet is the request packet and length is its length.
- *
- *  return -1 if not valid request.
- */
-int handle_request(const uint8_t *self_public_key, const uint8_t *self_secret_key, uint8_t *public_key, uint8_t *data,
-                   uint8_t *request_id, const uint8_t *packet, uint16_t length)
-{
-    if (!self_public_key || !public_key || !data || !request_id || !packet)
-        return -1;
-
-    if (length <= crypto_box_PUBLICKEYBYTES * 2 + crypto_box_NONCEBYTES + 1 + crypto_box_MACBYTES ||
-            length > MAX_CRYPTO_REQUEST_SIZE)
-        return -1;
-
-    if (public_key_cmp(packet + 1, self_public_key) != 0)
-        return -1;
-
-    memcpy(public_key, packet + 1 + crypto_box_PUBLICKEYBYTES, crypto_box_PUBLICKEYBYTES);
-    const uint8_t *nonce = packet + 1 + crypto_box_PUBLICKEYBYTES * 2;
-    uint8_t temp[MAX_CRYPTO_REQUEST_SIZE]; // FIXME sodium_memzero before exit function
-    int len1 = decrypt_data(public_key, self_secret_key, nonce,
-                            packet + 1 + crypto_box_PUBLICKEYBYTES * 2 + crypto_box_NONCEBYTES,
-                            length - (crypto_box_PUBLICKEYBYTES * 2 + crypto_box_NONCEBYTES + 1), temp);
-
-    if (len1 == -1 || len1 == 0)
-        return -1;
-
-    request_id[0] = temp[0];
-    --len1;
-    memcpy(data, temp + 1, len1);
-    return len1;
 }
